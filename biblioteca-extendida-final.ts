@@ -372,4 +372,369 @@ export class Biblioteca {
     const evento = this.eventos.find(e => e.id === eventoId);
 
     if (!socio) {
+      throw new Error("Socio no encontrado");
+    }
+    if (!evento) {
+      throw new Error("Evento no encontrado");
+    }
+
+    evento.agregarParticipante(socioId);
+    socio.agregarNotificacion(
+      'evento_proximo',
+      `Te has inscrito al evento "${evento.titulo}" el ${evento.fecha.toLocaleDateString()}`,
+      'media'
+    );
+  }
+
+  /**
+   * Desinscribe un socio de un evento
+   * @param socioId - ID del socio
+   * @param eventoId - ID del evento
+   */
+  desinscribirSocioDeEvento(socioId: number, eventoId: number): void {
+    const evento = this.eventos.find(e => e.id === eventoId);
+    const socio = this.buscarSocio(socioId);
+
+    if (!evento) {
+      throw new Error("Evento no encontrado");
+    }
+
+    if (evento.quitarParticipante(socioId) && socio) {
+      socio.agregarNotificacion(
+        'evento_proximo',
+        `Te has desinscrito del evento "${evento.titulo}"`,
+        'baja'
+      );
+    }
+  }
+
+  /**
+   * Obtiene eventos próximos
+   * @param dias - Días de anticipación
+   * @returns Array de eventos próximos
+   */
+  getEventosProximos(dias: number = 7): EventoBiblioteca[] {
+    return this.eventos.filter(evento => evento.estaProximo(dias));
+  }
+
+  /**
+   * Obtiene todos los eventos
+   * @returns Array de eventos
+   */
+  getTodosLosEventos(): EventoBiblioteca[] {
+    return [...this.eventos];
+  }
+
+  /**
+   * Cancela un evento
+   * @param eventoId - ID del evento a cancelar
+   */
+  cancelarEvento(eventoId: number): void {
+    const evento = this.eventos.find(e => e.id === eventoId);
+    if (!evento) {
+      throw new Error("Evento no encontrado");
+    }
+
+    // Notificar a todos los participantes
+    const participantes = evento.getParticipantes();
+    for (const socioId of participantes) {
+      const socio = this.buscarSocio(socioId);
+      if (socio) {
+        socio.agregarNotificacion(
+          'evento_cancelado',
+          `El evento "${evento.titulo}" programado para el ${evento.fecha.toLocaleDateString()} ha sido cancelado`,
+          'alta'
+        );
+      }
+    }
+
+    // Remover el evento
+    const index = this.eventos.indexOf(evento);
+    this.eventos.splice(index, 1);
+  }
+
+  // ==================== TAREA 4: SISTEMA DE NOTIFICACIONES AUTOMÁTICAS ====================
+
+  /**
+   * Procesa todas las notificaciones automáticas del sistema
+   */
+  procesarNotificacionesAutomaticas(): void {
+    for (const socio of this.socios) {
+      // Procesar notificaciones individuales del socio
+      socio.procesarNotificacionesAutomaticas();
+
+      // Notificar sobre eventos próximos en los que está inscrito
+      for (const evento of this.eventos) {
+        if (evento.estaProximo() && evento.estaInscrito(socio.id)) {
+          const diasRestantes = evento.diasRestantes();
+          socio.agregarNotificacion(
+            'evento_proximo',
+            `Recordatorio: El evento "${evento.titulo}" es ${diasRestantes === 0 ? 'hoy' : `en ${diasRestantes} días`}`,
+            'alta'
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Notifica a socios cuando se agrega un libro de un autor que han leído
+   * @param autor - Autor del nuevo libro
+   * @param libro - Libro agregado
+   */
+  private notificarNuevoLibroAutor(autor: Autor, libro: Libro): void {
+    for (const socio of this.socios) {
+      const autoresFavoritos = socio.getAutoresFavoritos();
+      if (autoresFavoritos.has(autor)) {
+        socio.agregarNotificacion(
+          'nuevo_libro_autor_favorito',
+          `¡Nuevo libro disponible de ${autor.nombre}: "${libro.titulo}"!`,
+          'media'
+        );
+      }
+    }
+  }
+
+  // ==================== TAREA 5: SISTEMA DE RECOMENDACIONES ====================
+
+  /**
+   * Genera recomendaciones personalizadas para un socio
+   * @param socioId - ID del socio
+   * @param limite - Número máximo de recomendaciones
+   * @returns Array de libros recomendados
+   */
+  recomendarLibros(socioId: number, limite: number = 5): Libro[] {
+    const socio = this.buscarSocio(socioId);
+    if (!socio) return [];
+
+    const historial = socio.getHistorialLectura();
+    const autoresFavoritos = socio.getAutoresFavoritos();
+    const palabrasClaveHistorial = socio.getPalabrasClaveHistorial();
+    const recomendaciones: Libro[] = [];
+
+    // 1. Libros de autores favoritos que no haya leído
+    for (const [autor] of autoresFavoritos) {
+      const librosDelAutor = this.getLibrosPorAutor(autor);
+      for (const libro of librosDelAutor) {
+        if (!socio.yaLeyoLibro(libro) && 
+            !recomendaciones.some(r => r.isbn === libro.isbn)) {
+          recomendaciones.push(libro);
+        }
+      }
+    }
+
+    // 2. Libros con títulos similares basados en palabras clave
+    const palabrasClaveArray = Array.from(palabrasClaveHistorial.keys()).slice(0, 10);
+    for (const libro of this.inventario) {
+      if (!socio.yaLeyoLibro(libro) && 
+          !recomendaciones.some(r => r.isbn === libro.isbn)) {
+        const tituloLibro = libro.titulo.toLowerCase();
+        for (const palabra of palabrasClaveArray) {
+          if (tituloLibro.includes(palabra)) {
+            recomendaciones.push(libro);
+            break;
+          }
+        }
+      }
+    }
+
+    // 3. Libros populares entre otros socios con gustos similares
+    const librosPopulares = this.getLibrosPopulares();
+    for (const libro of librosPopulares) {
+      if (!socio.yaLeyoLibro(libro) && 
+          !recomendaciones.some(r => r.isbn === libro.isbn)) {
+        recomendaciones.push(libro);
+      }
+    }
+
+    return recomendaciones.slice(0, limite);
+  }
+
+  /**
+   * Obtiene libros más populares basado en historial de todos los socios
+   * @returns Array de libros ordenados por popularidad
+   */
+  private getLibrosPopulares(): Libro[] {
+    const popularidad = new Map<Libro, number>();
+
+    for (const socio of this.socios) {
+      const historial = socio.getHistorialLectura();
+      for (const libro of historial) {
+        const count = popularidad.get(libro) || 0;
+        popularidad.set(libro, count + 1);
+      }
+    }
+
+    return Array.from(popularidad.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([libro]) => libro)
+      .slice(0, 10);
+  }
+
+  // ==================== TAREA 2: GESTIÓN DE MULTAS ====================
+
+  /**
+   * Obtiene socios con multas pendientes
+   * @returns Array de socios con multas
+   */
+  getSociosConMultas(): Array<{socio: Socio, multa: number}> {
+    return this.socios
+      .map(socio => ({socio, multa: socio.calcularMultasPendientes()}))
+      .filter(item => item.multa > 0);
+  }
+
+  /**
+   * Procesa el pago de multas de un socio
+   * @param socioId - ID del socio
+   * @param monto - Monto a pagar
+   */
+  procesarPagoMulta(socioId: number, monto: number): void {
+    const socio = this.buscarSocio(socioId);
+    if (!socio) {
+      throw new Error("Socio no encontrado");
+    }
+
+    socio.pagarMulta(monto);
+  }
+
+  /**
+   * Obtiene el total de multas pendientes en el sistema
+   * @returns Monto total de multas
+   */
+  getTotalMultasPendientes(): number {
+    return this.socios.reduce((total, socio) => total + socio.calcularMultasPendientes(), 0);
+  }
+
+  // ==================== MÉTODOS DE CONSULTA Y ESTADÍSTICAS ====================
+
+  /**
+   * Obtiene estadísticas generales de la biblioteca
+   * @returns Objeto con estadísticas
+   */
+  getEstadisticasGenerales(): {
+    totalLibros: number;
+    librosDisponibles: number;
+    librosPrestados: number;
+    totalSocios: number;
+    sociosActivos: number;
+    totalAutores: number;
+    totalEventos: number;
+    eventosProximos: number;
+    multasPendientes: number;
+    reservasPendientes: number;
+  } {
+    const librosPrestados = this.getLibrosPrestados();
+    const sociosActivos = this.socios.filter(s => s.getLibrosPrestados().length > 0);
+    const eventosProximos = this.getEventosProximos();
+    const reservasPendientes = this.inventario.reduce((total, libro) => total + libro.getCantidadReservas(), 0);
+
+    return {
+      totalLibros: this.inventario.length,
+      librosDisponibles: this.getLibrosDisponibles().length,
+      librosPrestados: librosPrestados.length,
+      totalSocios: this.socios.length,
+      sociosActivos: sociosActivos.length,
+      totalAutores: this.autores.length,
+      totalEventos: this.eventos.length,
+      eventosProximos: eventosProximos.length,
+      multasPendientes: this.getTotalMultasPendientes(),
+      reservasPendientes: reservasPendientes
+    };
+  }
+
+  /**
+   * Obtiene información de libros prestados
+   * @returns Array con información de préstamos
+   */
+  getLibrosPrestados(): Array<{libro: Libro, socio: Socio, prestamo: any}> {
+    const librosEnPrestamo: Array<{libro: Libro, socio: Socio, prestamo: any}> = [];
+    
+    for (const socio of this.socios) {
+      for (const prestamo of socio.getLibrosPrestados()) {
+        librosEnPrestamo.push({ libro: prestamo.libro, socio, prestamo });
+      }
+    }
+    
+    return librosEnPrestamo;
+  }
+
+  /**
+   * Obtiene libros vencidos en todo el sistema
+   * @returns Array con información de libros vencidos
+   */
+  getLibrosVencidos(): Array<{libro: Libro, socio: Socio, prestamo: any, multa: number}> {
+    const librosVencidos: Array<{libro: Libro, socio: Socio, prestamo: any, multa: number}> = [];
+    
+    for (const socio of this.socios) {
+      for (const prestamo of socio.getLibrosVencidos()) {
+        librosVencidos.push({ 
+          libro: prestamo.libro, 
+          socio, 
+          prestamo,
+          multa: prestamo.calcularMulta()
+        });
+      }
+    }
+    
+    return librosVencidos;
+  }
+
+  /**
+   * Busca en todo el catálogo (libros, autores, socios)
+   * @param termino - Término de búsqueda
+   * @returns Objeto con resultados de búsqueda
+   */
+  buscarEnCatalogo(termino: string): {
+    libros: Libro[];
+    autores: Autor[];
+    socios: Socio[];
+  } {
+    return {
+      libros: this.inventario.filter(libro => libro.coincideConBusqueda(termino)),
+      autores: this.autores.filter(autor => 
+        autor.nombre.toLowerCase().includes(termino.toLowerCase())
+      ),
+      socios: this.buscarSociosPorNombre(termino)
+    };
+  }
+
+  /**
+   * Genera un reporte completo del estado de la biblioteca
+   * @returns String con reporte detallado
+   */
+  generarReporteCompleto(): string {
+    const stats = this.getEstadisticasGenerales();
+    const librosVencidos = this.getLibrosVencidos();
+    const sociosConMultas = this.getSociosConMultas();
+
+    return `
+=== REPORTE DE BIBLIOTECA ===
+Fecha: ${new Date().toLocaleString()}
+
+INVENTARIO:
+- Total de libros: ${stats.totalLibros}
+- Libros disponibles: ${stats.librosDisponibles}
+- Libros prestados: ${stats.librosPrestados}
+- Reservas pendientes: ${stats.reservasPendientes}
+
+SOCIOS:
+- Total de socios: ${stats.totalSocios}
+- Socios activos: ${stats.sociosActivos}
+- Socios con multas: ${sociosConMultas.length}
+
+EVENTOS:
+- Total de eventos: ${stats.totalEventos}
+- Eventos próximos: ${stats.eventosProximos}
+
+SITUACIÓN FINANCIERA:
+- Multas pendientes: ${stats.multasPendientes}
+
+ALERTAS:
+- Libros vencidos: ${librosVencidos.length}
+${librosVencidos.length > 0 ? '- Requieren atención inmediata' : '- Situación normal'}
+
+AUTORES REGISTRADOS: ${stats.totalAutores}
+    `.trim();
+  }
+}
       
